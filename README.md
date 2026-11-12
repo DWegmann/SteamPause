@@ -15,6 +15,8 @@ The app restores the previous Steam download settings when the rules stop applyi
 
 If you are upgrading from SteamPause, quit SteamPause before opening the new EXE. The app uses your existing settings under `%LOCALAPPDATA%\SteamPause` and updates an enabled autostart entry to point to the new EXE.
 
+The settings window shows the app version in its title bar. The app checks for new releases on GitHub shortly after startup and every 12 hours while running. Click the notification to open the release page, or use **Nach App-Updates suchen …** in the tray menu.
+
 ## Steam compatibility
 
 Steam Download Control works with 64-bit Steam clients that provide the required native download interface. It verifies Valve's signature on `steamclient64.dll` and locates the required download methods at runtime. The app reports a compatibility error if it cannot verify the interface.

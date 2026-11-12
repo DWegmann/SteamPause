@@ -17,7 +17,8 @@ internal sealed class SettingsWindow : Form
     public SettingsWindow(Action<Settings> save)
     {
         this.save = save;
-        Text = Program.AppName;
+        var version = Program.AppVersion;
+        Text = $"{Program.AppName} {version.ToString(version.Revision == 0 ? 3 : 4)}";
         StartPosition = FormStartPosition.CenterScreen;
         ClientSize = new Size(770, 440);
         MinimumSize = new Size(610, 370);

@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
 
@@ -7,6 +8,7 @@ namespace SteamDownloadControl;
 internal static class Program
 {
     public const string AppName = "Steam Download Control";
+    public static Version AppVersion { get; } = typeof(Program).Assembly.GetName().Version!;
 
     [STAThread]
     private static void Main(string[] args)
@@ -41,15 +43,20 @@ internal static class Program
 internal sealed class TrayApp : ApplicationContext
 {
     private const string SettingsFile = "settings.json";
+    private const string CheckForAppUpdatesText = "Nach App-Updates suchen …";
+    private const int AppUpdateCheckInterval = 12 * 60 * 60 * 1000;
     private readonly Monitor monitor = new();
     private readonly NotifyIcon icon;
     private readonly SettingsWindow window;
     private readonly ToolStripMenuItem toggle;
+    private readonly ToolStripMenuItem appUpdateItem;
     private readonly System.Windows.Forms.Timer timer = new() { Interval = 1500 };
+    private readonly System.Windows.Forms.Timer appUpdateTimer = new() { Interval = 5000 };
     private Settings settings = LocalFiles.Read<Settings>(SettingsFile) ?? new();
     private readonly Icon activeIcon = new(typeof(TrayApp), "active.ico");
     private readonly Icon inactiveIcon = new(typeof(TrayApp), "inactive.ico");
     private Task<MonitorResult>? currentUpdate;
+    private string? availableAppUpdate;
     private bool needsAttention;
     private bool exiting;
 
@@ -70,9 +77,22 @@ internal sealed class TrayApp : ApplicationContext
             SaveSettings(settings with { Enabled = !settings.Enabled }));
         menu.Items.Add(toggle);
         menu.Items.Add(new ToolStripSeparator());
+        appUpdateItem = new ToolStripMenuItem(CheckForAppUpdatesText, null, async (_, _) =>
+        {
+            if (availableAppUpdate is { } tag)
+                OpenAppRelease(tag);
+            else
+                await CheckForAppUpdate(showResult: true);
+        });
+        menu.Items.Add(appUpdateItem);
         menu.Items.Add("Beenden", null, async (_, _) => await Quit());
         icon = new NotifyIcon { Text = Program.AppName, ContextMenuStrip = menu };
         icon.DoubleClick += (_, _) => OpenSettings();
+        icon.BalloonTipClicked += (_, _) =>
+        {
+            if (availableAppUpdate is { } tag)
+                OpenAppRelease(tag);
+        };
         window.RefreshSettings(settings);
         RefreshAutomation();
         icon.Visible = true;
@@ -81,6 +101,12 @@ internal sealed class TrayApp : ApplicationContext
 
         timer.Tick += async (_, _) => await Update();
         timer.Start();
+        appUpdateTimer.Tick += async (_, _) =>
+        {
+            appUpdateTimer.Interval = AppUpdateCheckInterval;
+            await CheckForAppUpdate(showResult: false);
+        };
+        appUpdateTimer.Start();
     }
 
     private void OpenSettings()
@@ -115,6 +141,67 @@ internal sealed class TrayApp : ApplicationContext
     }
 
     private void RefreshTrayIcon() => icon.Icon = needsAttention ? SystemIcons.Warning : window.Icon;
+
+    private async Task CheckForAppUpdate(bool showResult)
+    {
+        if (exiting || !appUpdateItem.Enabled)
+            return;
+
+        appUpdateItem.Enabled = false;
+        string? tag;
+        try
+        {
+            tag = await AppUpdates.FindNewerTagAsync();
+        }
+        catch (Exception error) when (error is HttpRequestException or OperationCanceledException or JsonException or IOException)
+        {
+            if (showResult && !exiting)
+                MessageBox.Show(window, "GitHub konnte nicht auf App-Updates geprüft werden.",
+                    Program.AppName, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+        finally
+        {
+            appUpdateItem.Enabled = true;
+        }
+
+        if (exiting)
+            return;
+
+        var newlyAvailable = tag != availableAppUpdate;
+        availableAppUpdate = tag;
+        appUpdateItem.Text = tag is null ? CheckForAppUpdatesText : $"App-Update {tag} herunterladen …";
+        if (tag is null)
+        {
+            if (showResult)
+                MessageBox.Show(window, "Du verwendest bereits die aktuelle Version.",
+                    Program.AppName, MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+        else if (showResult)
+        {
+            if (MessageBox.Show(window, $"Version {tag} ist verfügbar. Downloadseite auf GitHub öffnen?",
+                    Program.AppName, MessageBoxButtons.YesNo, MessageBoxIcon.Information) == DialogResult.Yes)
+                OpenAppRelease(tag);
+        }
+        else if (newlyAvailable)
+        {
+            icon.ShowBalloonTip(8000, $"{Program.AppName} {tag} verfügbar",
+                "Klicken, um die Downloadseite auf GitHub zu öffnen.", ToolTipIcon.Info);
+        }
+    }
+
+    private void OpenAppRelease(string tag)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(AppUpdates.ReleasePage(tag)) { UseShellExecute = true });
+        }
+        catch (Exception error) when (error is Win32Exception or InvalidOperationException)
+        {
+            MessageBox.Show(window, "Die Downloadseite auf GitHub konnte nicht geöffnet werden.",
+                Program.AppName, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+    }
 
     private async Task Update()
     {
@@ -172,6 +259,7 @@ internal sealed class TrayApp : ApplicationContext
     {
         if (disposing)
         {
+            appUpdateTimer.Dispose();
             timer.Dispose();
             monitor.Dispose();
             icon.Visible = false;
