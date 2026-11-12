@@ -2,10 +2,12 @@ using System.ComponentModel;
 using System.Globalization;
 using System.Text.Json;
 
-namespace SteamPause;
+namespace SteamDownloadControl;
 
 internal static class Program
 {
+    public const string AppName = "Steam Download Control";
+
     [STAThread]
     private static void Main(string[] args)
     {
@@ -17,6 +19,7 @@ internal static class Program
             return;
         }
 
+        // Keep the same mutex as SteamPause so both versions cannot control Steam at once.
         using var instance = new Mutex(true, @"Local\SteamPause.Tray", out var firstInstance);
         if (!firstInstance)
             return;
@@ -29,8 +32,8 @@ internal static class Program
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException)
         {
-            MessageBox.Show($"SteamPause konnte seine lokalen Einstellungen nicht laden.\n\n{error.Message}",
-                "SteamPause", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            MessageBox.Show($"{AppName} konnte seine lokalen Einstellungen nicht laden.\n\n{error.Message}",
+                AppName, MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
     }
 }
@@ -44,8 +47,8 @@ internal sealed class TrayApp : ApplicationContext
     private readonly ToolStripMenuItem toggle;
     private readonly System.Windows.Forms.Timer timer = new() { Interval = 1500 };
     private Settings settings = LocalFiles.Read<Settings>(SettingsFile) ?? new();
-    private readonly Icon activeIcon = new(typeof(TrayApp), "SteamPause-active.ico");
-    private readonly Icon inactiveIcon = new(typeof(TrayApp), "SteamPause-inactive.ico");
+    private readonly Icon activeIcon = new(typeof(TrayApp), "active.ico");
+    private readonly Icon inactiveIcon = new(typeof(TrayApp), "inactive.ico");
     private Task<MonitorResult>? currentUpdate;
     private bool needsAttention;
     private bool exiting;
@@ -68,7 +71,7 @@ internal sealed class TrayApp : ApplicationContext
         menu.Items.Add(toggle);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Beenden", null, async (_, _) => await Quit());
-        icon = new NotifyIcon { Text = "SteamPause", ContextMenuStrip = menu };
+        icon = new NotifyIcon { Text = Program.AppName, ContextMenuStrip = menu };
         icon.DoubleClick += (_, _) => OpenSettings();
         window.RefreshSettings(settings);
         RefreshAutomation();
@@ -98,7 +101,7 @@ internal sealed class TrayApp : ApplicationContext
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {
             MessageBox.Show(window, $"Die Einstellungen konnten nicht gespeichert werden.\n\n{error.Message}",
-                "SteamPause", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                Program.AppName, MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
         window.RefreshSettings(settings);
         RefreshAutomation();
@@ -153,7 +156,7 @@ internal sealed class TrayApp : ApplicationContext
             await currentUpdate;
         var result = await RunMonitor(settings with { Enabled = false }, retryNow: true);
         if (result.Attention && MessageBox.Show(window,
-                $"{result.Detail}\n\nSteamPause trotzdem beenden?", "SteamPause",
+                $"{result.Detail}\n\n{Program.AppName} trotzdem beenden?", Program.AppName,
                 MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
         {
             exiting = false;

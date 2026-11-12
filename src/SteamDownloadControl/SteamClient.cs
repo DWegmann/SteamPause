@@ -4,7 +4,7 @@ using System.Globalization;
 using System.Text.Json;
 using Microsoft.Win32;
 
-namespace SteamPause;
+namespace SteamDownloadControl;
 
 internal sealed record SteamRun(string Exe, int Id, long Started)
 {
@@ -71,7 +71,7 @@ internal sealed class SteamClient : IDisposable
             StandardOutputEncoding = System.Text.Encoding.UTF8
         };
         if (Path.GetFileNameWithoutExtension(start.FileName).Equals("dotnet", StringComparison.OrdinalIgnoreCase))
-            start.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, "SteamPause.dll"));
+            start.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, $"{typeof(SteamClient).Assembly.GetName().Name}.dll"));
         start.ArgumentList.Add("--steam-worker");
         start.ArgumentList.Add(steam.Exe);
         start.ArgumentList.Add(steam.Id.ToString(CultureInfo.InvariantCulture));

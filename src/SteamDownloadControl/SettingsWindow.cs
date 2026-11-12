@@ -1,4 +1,4 @@
-namespace SteamPause;
+namespace SteamDownloadControl;
 
 internal sealed class SettingsWindow : Form
 {
@@ -17,7 +17,7 @@ internal sealed class SettingsWindow : Form
     public SettingsWindow(Action<Settings> save)
     {
         this.save = save;
-        Text = "SteamPause";
+        Text = Program.AppName;
         StartPosition = FormStartPosition.CenterScreen;
         ClientSize = new Size(770, 440);
         MinimumSize = new Size(610, 370);
@@ -70,8 +70,9 @@ internal sealed class SettingsWindow : Form
             if (!refreshing)
                 save(settings with { StartScheduledUpdates = scheduledUpdates.Checked });
         };
-        try { startup.Checked = Startup.IsEnabled(); }
-        catch (Exception error) when (error is UnauthorizedAccessException or System.Security.SecurityException)
+        try { startup.Checked = Startup.Initialize(); }
+        catch (Exception error) when (error is UnauthorizedAccessException or System.Security.SecurityException
+            or IOException)
         {
             startup.Enabled = false;
         }

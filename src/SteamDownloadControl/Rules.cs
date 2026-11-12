@@ -6,7 +6,7 @@ using System.Text.Json;
 using Microsoft.Win32;
 using Microsoft.Win32.SafeHandles;
 
-namespace SteamPause;
+namespace SteamDownloadControl;
 
 internal sealed record Rule(string Path, int? KilobitsPerSecond)
 {
@@ -24,6 +24,7 @@ internal sealed record PauseChange(SteamRun Steam, bool Confirmed);
 
 internal static class LocalFiles
 {
+    // Reuse SteamPause's settings and pending Steam changes after the rename.
     private static readonly string Folder = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SteamPause");
 
@@ -50,10 +51,22 @@ internal static class Startup
     private const string Name = "SteamPause";
     private static string Command => $"\"{Environment.ProcessPath}\" --tray";
 
-    public static bool IsEnabled()
+    public static bool Initialize()
     {
         using var key = Registry.CurrentUser.OpenSubKey(RunKey);
-        return string.Equals(key?.GetValue(Name) as string, Command, StringComparison.OrdinalIgnoreCase);
+        var savedCommand = key?.GetValue(Name) as string;
+        if (string.Equals(savedCommand, Command, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        // Retarget an existing SteamPause autostart entry to the renamed executable.
+        if (savedCommand?.EndsWith("\\SteamPause.exe\" --tray", StringComparison.OrdinalIgnoreCase) == true &&
+            string.Equals(Path.GetFileName(Environment.ProcessPath), "SteamDownloadControl.exe",
+                StringComparison.OrdinalIgnoreCase) && Command.Length <= 260)
+        {
+            SetEnabled(true);
+            return true;
+        }
+        return false;
     }
 
     public static void SetEnabled(bool enabled)

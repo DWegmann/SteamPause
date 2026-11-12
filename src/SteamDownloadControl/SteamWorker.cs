@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.Json;
 
-namespace SteamPause;
+namespace SteamDownloadControl;
 
 internal static class SteamWorker
 {
@@ -98,7 +98,7 @@ internal sealed class NativeDownloadManager : IDisposable
         using var dll = File.OpenRead(dllPath);
         if (RuntimeInformation.ProcessArchitecture != Architecture.X64 ||
             Convert.ToHexString(SHA256.HashData(dll)) != TestedHash)
-            throw new InvalidOperationException("Diese Steam-Version wird von SteamPause noch nicht unterstützt.");
+            throw new InvalidOperationException($"Diese Steam-Version wird von {Program.AppName} noch nicht unterstützt.");
 
         // Keep the file open across LoadLibraryEx so the verified image cannot be replaced in between.
         var module = LoadLibraryEx(dllPath, 0, LoadLibrarySearchDllLoadDir | LoadLibrarySearchSystem32);

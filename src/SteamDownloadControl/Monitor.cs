@@ -1,7 +1,7 @@
 using System.ComponentModel;
 using System.Text.Json;
 
-namespace SteamPause;
+namespace SteamDownloadControl;
 
 internal sealed record MonitorResult(string Detail, bool Attention = false);
 
