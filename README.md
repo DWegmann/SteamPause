@@ -17,7 +17,7 @@ If you are upgrading from SteamPause, quit SteamPause before opening the new EXE
 
 ## Steam compatibility
 
-Steam Download Control supports the exact 64-bit Steam client build it was tested with (`steamclient64.dll` file version `11.15.70.27`). It verifies the DLL's SHA-256 before accessing Steam's download controls. A Steam update can require a new release of the app.
+Steam Download Control works with 64-bit Steam clients that provide the required native download interface. It verifies Valve's signature on `steamclient64.dll` and locates the required download methods at runtime. The app reports a compatibility error if it cannot verify the interface.
 
 ## Build
 

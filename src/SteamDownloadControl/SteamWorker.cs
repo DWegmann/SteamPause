@@ -1,6 +1,5 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
-using System.Security.Cryptography;
 using System.Text.Json;
 
 namespace SteamDownloadControl;
@@ -31,7 +30,7 @@ internal static class SteamWorker
             return 0;
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or Win32Exception
-            or InvalidOperationException or JsonException or EntryPointNotFoundException or System.Security.SecurityException)
+            or InvalidOperationException or JsonException or BadImageFormatException or System.Security.SecurityException)
         {
             Reply(new SteamResponse(null, Error: error.Message));
             return 1;
@@ -47,10 +46,9 @@ internal static class SteamWorker
 
 internal sealed class NativeDownloadManager : IDisposable
 {
-    // The private x64 ABI below was verified against this exact Steam client build.
-    private const string TestedHash = "253E0A11A4415B38C78A42F7BDD6ECC426455F06C1BA6453A48090DF3142DBBC";
     private const int LoadLibrarySearchDllLoadDir = 0x00000100;
     private const int LoadLibrarySearchSystem32 = 0x00000800;
+    private const string EngineVersion = "CLIENTENGINE_INTERFACE_VERSION005";
     private const uint UpdateAvailable = 0x02 | 0x10; // Required or optional.
     private const uint IneligibleUpdateState = 0x01 | 0x08 | 0x100 | 0x200; // Uninstalled, queued, running, or paused.
     private const int DownloadFirst = 1; // Downloads.ResumeAppUpdate in SteamUI.dll.
@@ -71,7 +69,7 @@ internal sealed class NativeDownloadManager : IDisposable
     private readonly ReadAppValue readDeferredUntil;
     private readonly ChangeQueuePlacement changeQueuePlacement;
 
-    private NativeDownloadManager(nint module, nint manager, int pipe, int user, ReleaseUser releaseUser,
+    private NativeDownloadManager(SteamInterface client, nint manager, int pipe, int user, ReleaseUser releaseUser,
         ReleasePipe releasePipe)
     {
         this.manager = manager;
@@ -79,36 +77,42 @@ internal sealed class NativeDownloadManager : IDisposable
         this.user = user;
         this.releaseUser = releaseUser;
         this.releasePipe = releasePipe;
-        readEnabled = Method<ReadEnabled>(module, manager, 40, 0x742BA0);
-        readRate = Method<ReadRate>(module, manager, 89, 0x77C3F0);
-        setEnabled = Method<SetEnabled>(module, manager, 39, 0x8751E0);
-        setRate = Method<SetRate>(module, manager, 88, 0x875050);
-        readInstallState = Method<ReadAppValue>(module, manager, 4, 0x76A020);
-        countInstalledApps = Method<ReadValue>(module, manager, 15, 0x794340);
-        readInstalledApps = Method<ReadInstalledApps>(module, manager, 16, 0x788A80);
-        readDownloadingApp = Method<ReadValue>(module, manager, 42, 0x77C920);
-        changeQueuePlacement = Method<ChangeQueuePlacement>(module, manager, 56, 0x74FAD0);
-        readDeferredUntil = Method<ReadAppValue>(module, manager, 59, 0x768A00);
-        countQueuedApps = Method<ReadValue>(module, manager, 60, 0x7934D0);
+        var methods = client.GetAppManagerMethods(manager);
+        readEnabled = methods.Get<ReadEnabled>("BIsDownloadingEnabled");
+        readRate = methods.Get<ReadRate>("GetDownloadThrottleRateKbps");
+        setEnabled = methods.Get<SetEnabled>("SetDownloadingEnabled");
+        setRate = methods.Get<SetRate>("SetDownloadThrottleRateKbps");
+        readInstallState = methods.Get<ReadAppValue>("GetAppInstallState");
+        countInstalledApps = methods.Get<ReadValue>("GetNumInstalledApps");
+        readInstalledApps = methods.Get<ReadInstalledApps>("GetInstalledApps");
+        readDownloadingApp = methods.Get<ReadValue>("GetDownloadingAppID");
+        changeQueuePlacement = methods.Get<ChangeQueuePlacement>("ChangeAppDownloadQueuePlacement");
+        readDeferredUntil = methods.Get<ReadAppValue>("GetAppAutoUpdateDelayedUntilTime");
+        countQueuedApps = methods.Get<ReadValue>("GetNumAppsInDownloadQueue");
     }
 
     public static NativeDownloadManager Open(SteamRun steam)
     {
         var dllPath = Path.Combine(Path.GetDirectoryName(steam.Exe)!, "steamclient64.dll");
-        using var dll = File.OpenRead(dllPath);
-        if (RuntimeInformation.ProcessArchitecture != Architecture.X64 ||
-            Convert.ToHexString(SHA256.HashData(dll)) != TestedHash)
-            throw new InvalidOperationException($"Diese Steam-Version wird von {Program.AppName} noch nicht unterstützt.");
+        if (RuntimeInformation.ProcessArchitecture != Architecture.X64)
+            throw new InvalidOperationException("Die Steam-Download-Schnittstelle benötigt einen x64-Prozess.");
 
         // Keep the file open across LoadLibraryEx so the verified image cannot be replaced in between.
+        using var dll = File.OpenRead(dllPath);
+        if (!SteamSignature.IsValid(dll))
+            throw new InvalidOperationException("Die Valve-Signatur der Steam-Bibliothek konnte nicht bestätigt werden.");
         var module = LoadLibraryEx(dllPath, 0, LoadLibrarySearchDllLoadDir | LoadLibrarySearchSystem32);
         if (module == 0)
             throw new Win32Exception(Marshal.GetLastPInvokeError(), "Die Steam-Bibliothek konnte nicht geladen werden.");
 
+        using var client = new SteamInterface(module, dll);
         var factory = Export<CreateInterface>(module, "CreateInterface");
-        var engine = factory("CLIENTENGINE_INTERFACE_VERSION005", out var result);
-        if (result != 0 || engine == 0 || Marshal.ReadIntPtr(engine) != module + 0x1360960)
-            throw new InvalidOperationException("Steams native Engine-Schnittstelle konnte nicht geprüft werden.");
+        var engine = factory(EngineVersion, out var result);
+        if (result != 0 || engine == 0)
+            throw new InvalidOperationException("Steam stellt die benötigte Engine-Schnittstelle nicht bereit.");
+        // These slots are part of CLIENTENGINE_INTERFACE_VERSION005.
+        var validate = client.GetEngineMethod<CheckHandles>(engine, 7);
+        var getManager = client.GetEngineMethod<GetAppManager>(engine, 43);
 
         var createPipe = Export<CreatePipe>(module, "Steam_CreateSteamPipe");
         var connect = Export<ConnectUser>(module, "Steam_ConnectToGlobalUser");
@@ -124,14 +128,10 @@ internal sealed class NativeDownloadManager : IDisposable
         try
         {
             user = connect(pipe);
-            var validate = Method<CheckHandles>(module, engine, 7, 0x983F30);
             if (user == 0 || validate(engine, user, pipe) == 0)
                 throw new InvalidOperationException("Die lokale Steam-Sitzung konnte nicht bestätigt werden.");
-            var getManager = Method<GetAppManager>(module, engine, 43, 0x9813B0);
             var manager = getManager(engine, user, pipe);
-            if (manager == 0 || Marshal.ReadIntPtr(manager) != module + 0x1331088)
-                throw new InvalidOperationException("Steam hat den nativen Download-Manager nicht bereitgestellt.");
-            return new NativeDownloadManager(module, manager, pipe, user, releaseUser, releasePipe);
+            return new NativeDownloadManager(client, manager, pipe, user, releaseUser, releasePipe);
         }
         catch
         {
@@ -220,14 +220,10 @@ internal sealed class NativeDownloadManager : IDisposable
         // The isolated process exits next. Steam's loaded module stays mapped until then.
     }
 
-    private static T Export<T>(nint module, string name) where T : Delegate =>
-        Marshal.GetDelegateForFunctionPointer<T>(NativeLibrary.GetExport(module, name));
-
-    private static T Method<T>(nint module, nint instance, int slot, int expectedRva) where T : Delegate
+    private static T Export<T>(nint module, string name) where T : Delegate
     {
-        var function = Marshal.ReadIntPtr(Marshal.ReadIntPtr(instance), slot * IntPtr.Size);
-        if (function != module + expectedRva)
-            throw new InvalidOperationException("Steams Download-Schnittstelle stimmt nicht mit dem geprüften Build überein.");
+        if (!NativeLibrary.TryGetExport(module, name, out var function))
+            throw new InvalidOperationException($"In der Steam-Bibliothek fehlt die Funktion {name}.");
         return Marshal.GetDelegateForFunctionPointer<T>(function);
     }
 
